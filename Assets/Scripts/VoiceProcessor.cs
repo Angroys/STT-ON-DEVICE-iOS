@@ -110,6 +110,8 @@ public class VoiceProcessor : MonoBehaviour
 
 
     AudioClip _audioClip;
+    private Coroutine _recordDataCoroutine;
+    private int _deviceSampleRate;
     private event Action RestartRecording;
 
     void Awake()
@@ -207,9 +209,18 @@ public class VoiceProcessor : MonoBehaviour
         SampleRate = sampleRate;
         FrameLength = frameSize;
 
-        _audioClip = Microphone.Start(CurrentDeviceName, true, 1, sampleRate);
+        // Use the device's native sample rate to avoid Unity's silent mis-labelling bug.
+        // If the device only supports e.g. 24000 Hz but we ask for 16000 Hz, Unity records
+        // at 24000 Hz while labelling the clip as 16000 Hz, corrupting all position math.
+        Microphone.GetDeviceCaps(CurrentDeviceName, out int minFreq, out int maxFreq);
+        _deviceSampleRate = (maxFreq == 0) ? sampleRate : maxFreq;
 
-        StartCoroutine(RecordData());
+        // 2-second clip to accommodate higher-than-16kHz device rates
+        _audioClip = Microphone.Start(CurrentDeviceName, true, 2, _deviceSampleRate);
+
+        Debug.Log($"[VoiceProcessor] Device: '{CurrentDeviceName}' | Output: {sampleRate} Hz | Recording at: {_deviceSampleRate} Hz");
+
+        _recordDataCoroutine = StartCoroutine(RecordData());
     }
 
     /// <summary>
@@ -225,7 +236,11 @@ public class VoiceProcessor : MonoBehaviour
         _audioClip = null;
         _didDetect = false;
 
-        StopCoroutine(RecordData());
+        if (_recordDataCoroutine != null)
+        {
+            StopCoroutine(_recordDataCoroutine);
+            _recordDataCoroutine = null;
+        }
     }
 
     /// <summary>
@@ -233,7 +248,11 @@ public class VoiceProcessor : MonoBehaviour
     /// </summary>
     IEnumerator RecordData()
     {
-        float[] sampleBuffer = new float[FrameLength];
+        // How many device-rate samples correspond to one output frame at SampleRate.
+        // e.g. device=24000, output=16000, FrameLength=512 → inputFrameLength=768
+        int inputFrameLength = Mathf.CeilToInt((float)FrameLength * _deviceSampleRate / SampleRate);
+        float[] inputBuffer = new float[inputFrameLength];
+        float[] sampleBuffer = new float[FrameLength]; // resampled output
         int startReadPos = 0;
 
         if (OnRecordingStart != null)
@@ -246,36 +265,50 @@ public class VoiceProcessor : MonoBehaviour
                 curClipPos += _audioClip.samples;
 
             int samplesAvailable = curClipPos - startReadPos;
-            if (samplesAvailable < FrameLength)
+            if (samplesAvailable < inputFrameLength)
             {
                 yield return null;
                 continue;
             }
 
-            int endReadPos = startReadPos + FrameLength;
+            int endReadPos = startReadPos + inputFrameLength;
             if (endReadPos > _audioClip.samples)
             {
                 // fragmented read (wraps around to beginning of clip)
-                // read bit at end of clip
                 int numSamplesClipEnd = _audioClip.samples - startReadPos;
                 float[] endClipSamples = new float[numSamplesClipEnd];
                 _audioClip.GetData(endClipSamples, startReadPos);
 
-                // read bit at start of clip
                 int numSamplesClipStart = endReadPos - _audioClip.samples;
                 float[] startClipSamples = new float[numSamplesClipStart];
                 _audioClip.GetData(startClipSamples, 0);
 
-                // combine to form full frame
-                Buffer.BlockCopy(endClipSamples, 0, sampleBuffer, 0, numSamplesClipEnd);
-                Buffer.BlockCopy(startClipSamples, 0, sampleBuffer, numSamplesClipEnd, numSamplesClipStart);
+                Buffer.BlockCopy(endClipSamples, 0, inputBuffer, 0, numSamplesClipEnd * sizeof(float));
+                Buffer.BlockCopy(startClipSamples, 0, inputBuffer, numSamplesClipEnd * sizeof(float), numSamplesClipStart * sizeof(float));
             }
             else
             {
-                _audioClip.GetData(sampleBuffer, startReadPos);
+                _audioClip.GetData(inputBuffer, startReadPos);
             }
 
             startReadPos = endReadPos % _audioClip.samples;
+
+            // Resample from _deviceSampleRate to SampleRate via linear interpolation
+            if (_deviceSampleRate == SampleRate)
+            {
+                Buffer.BlockCopy(inputBuffer, 0, sampleBuffer, 0, FrameLength * sizeof(float));
+            }
+            else
+            {
+                for (int i = 0; i < FrameLength; i++)
+                {
+                    float srcPos = (float)i * (inputFrameLength - 1) / (FrameLength - 1);
+                    int srcIndex = (int)srcPos;
+                    float t = srcPos - srcIndex;
+                    int nextIndex = Mathf.Min(srcIndex + 1, inputFrameLength - 1);
+                    sampleBuffer[i] = inputBuffer[srcIndex] * (1f - t) + inputBuffer[nextIndex] * t;
+                }
+            }
             if (_autoDetect == false)
             {
                 _transmit =_audioDetected = true;

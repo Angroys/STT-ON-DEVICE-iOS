@@ -70,7 +70,9 @@ public class VoskDialogText : MonoBehaviour
 
 	void Say(string response)
 	{
-		System.Diagnostics.Process.Start("/usr/bin/say", response); 
+#if UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
+		System.Diagnostics.Process.Start("/usr/bin/say", response);
+#endif
 	}
 
 	void AddFinalResponse(string response) {

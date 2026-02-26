@@ -281,10 +281,35 @@ public class VoskSpeechToText : MonoBehaviour
 		}
 	}
 
+	private int _silentFrameCount = 0;
+	private bool _micChecked = false;
+
 	//Callback from the voice processor when new audio is detected
 	private void VoiceProcessorOnOnFrameCaptured(short[] samples)
-	{	
-                _threadedBufferQueue.Enqueue(samples);
+	{
+		if (!_micChecked)
+		{
+			short peak = 0;
+			for (int i = 0; i < samples.Length; i++)
+				if (samples[i] > peak) peak = samples[i];
+
+			if (peak == 0)
+			{
+				_silentFrameCount++;
+				if (_silentFrameCount >= 50) // ~1.6s of silence at 512 samples / 16kHz
+				{
+					Debug.LogWarning("[Vosk] Microphone appears to be returning silence. Check OS microphone permission for Unity Editor (System Settings > Privacy > Microphone).");
+					_micChecked = true;
+				}
+			}
+			else
+			{
+				Debug.Log($"[Vosk] Microphone active, peak sample: {peak}");
+				_micChecked = true;
+			}
+		}
+
+		_threadedBufferQueue.Enqueue(samples);
 	}
 
 	//Callback from the voice processor when recording stops
@@ -338,6 +363,10 @@ public class VoskSpeechToText : MonoBehaviour
 				await Task.Delay(100);
 			}
 		}
+
+		var finalResult = _recognizer.FinalResult();
+		if (!string.IsNullOrEmpty(finalResult))
+			_threadedResultQueue.Enqueue(finalResult);
 
 		voskRecognizerReadMarker.End();
 	}
