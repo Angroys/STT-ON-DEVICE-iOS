@@ -98,7 +98,7 @@ You do **not** need `VoskDialogText.cs` or `VoskResultText.cs` — those are dem
 
 ### 2. Add a Vosk Language Model
 
-1. Download a model for your language from [https://alphacep.com/models.html](https://alphacep.com/models.html).
+1. Download a model for your language from [https://huggingface.co/rhasspy/vosk-models/tree/main/en](https://huggingface.co/rhasspy/vosk-models/tree/main/en).
    Choose a **"small"** model for mobile/real-time use. The Russian small model (`vosk-model-small-ru-0.22`) is ~40 MB.
 
 2. Place the `.zip` file in `Assets/StreamingAssets/`:
